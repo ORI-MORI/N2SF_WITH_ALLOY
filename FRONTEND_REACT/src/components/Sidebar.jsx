@@ -35,6 +35,7 @@ export default function Sidebar() {
                             { type: 'Gateway', color: 'bg-orange-600', label: '게이트웨이' },
                             { type: 'Mobile', color: 'bg-pink-600', label: '모바일' },
                             { type: 'Security Device', color: 'bg-red-600', label: '보안 장비' },
+                            { type: 'DNS Server', color: 'bg-violet-600', label: 'DNS 서버' },
                             { type: 'Wireless AP', color: 'bg-cyan-600', label: '무선 AP' },
                             { type: 'SaaS', color: 'bg-sky-600', label: 'SaaS (클라우드)' }
                         ].map((item) => (

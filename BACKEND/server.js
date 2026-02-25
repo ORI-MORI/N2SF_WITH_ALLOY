@@ -2,53 +2,119 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { generateAlloyFile } = require('./src/alloyGenerator');
-const { executeAlloy } = require('./src/alloyExecutor');
+const { executeAlloy, cleanupTempFiles } = require('./src/alloyExecutor');
 const { validateCommonProperties } = require('./src/simpleValidator');
 const fs = require('fs');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-app.use(cors());
-app.use(bodyParser.json());
+// CORS: restrict to known origins in production
+const corsOptions = IS_PRODUCTION
+    ? { origin: process.env.CORS_ORIGIN || 'http://localhost:5173', methods: ['POST', 'GET'] }
+    : { origin: true };
+app.use(cors(corsOptions));
+
+app.use(bodyParser.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ============================================================
+// Input Validation
+// ============================================================
+function validateAnalysisInput(data) {
+    if (!data || typeof data !== 'object') {
+        return 'Request body must be a JSON object';
+    }
+
+    // Must have at least locations or systems
+    if ((!data.locations || !Array.isArray(data.locations)) &&
+        (!data.systems || !Array.isArray(data.systems))) {
+        return 'Request must contain "locations" or "systems" arrays';
+    }
+
+    // Validate locations if present
+    if (data.locations && Array.isArray(data.locations)) {
+        for (const loc of data.locations) {
+            if (!loc.id) return 'Each location must have an "id"';
+        }
+    }
+
+    // Validate systems if present
+    if (data.systems && Array.isArray(data.systems)) {
+        for (const sys of data.systems) {
+            if (!sys.id) return 'Each system must have an "id"';
+            if (!sys.loc && !sys.location) return `System "${sys.id}" must have a location ("loc" or "location")`;
+        }
+    }
+
+    // Validate connections if present
+    if (data.connections && Array.isArray(data.connections)) {
+        for (const conn of data.connections) {
+            if (!conn.from || !conn.to) return 'Each connection must have "from" and "to"';
+        }
+    }
+
+    // Validate data if present
+    if (data.data && !Array.isArray(data.data)) {
+        return '"data" must be an array';
+    }
+
+    return null; // Valid
+}
+
+// ============================================================
+// Analysis Endpoint
+// ============================================================
 app.post('/analyze', async (req, res) => {
+    let alloyFilePath = null;
+
     try {
         const diagramData = req.body;
-        console.log('Received analysis request');
 
-        // Debug: Save payload
-        try {
-            fs.writeFileSync('last_request_payload.json', JSON.stringify(diagramData, null, 2));
-            console.log('Saved payload to last_request_payload.json');
-        } catch (e) {
-            console.error('Failed to save payload:', e);
+        // Input validation
+        const validationError = validateAnalysisInput(diagramData);
+        if (validationError) {
+            return res.status(400).json({ success: false, error: validationError });
         }
 
-        // 1. JS Validator (Fast Check) - Group B
+        if (!IS_PRODUCTION) {
+            console.log('Received analysis request');
+            try {
+                fs.writeFileSync('last_request_payload.json', JSON.stringify(diagramData, null, 2));
+            } catch (e) { /* ignore */ }
+        }
+
+        // 1. JS Validator (Fast Check)
         const jsValidation = validateCommonProperties(diagramData);
-        console.log(`JS Validation found ${jsValidation.total_count} violations.`);
+        if (!IS_PRODUCTION) {
+            console.log(`JS Validation found ${jsValidation.total_count} violations.`);
+        }
 
-        // 2. Alloy Engine (Deep Check) - Group A
-        const alloyFilePath = await generateAlloyFile(diagramData);
-        console.log('Generated Alloy file at:', alloyFilePath);
-
+        // 2. Alloy Engine (Deep Check)
+        alloyFilePath = await generateAlloyFile(diagramData);
         const executionResult = await executeAlloy(alloyFilePath);
-        console.log('Alloy execution result:', executionResult);
 
         // 3. Merge Results (Hybrid Verification)
         if (executionResult.success) {
             const finalThreats = { ...executionResult.result.threats };
             let finalCount = executionResult.result.total_count;
 
-            // Merge JS threats into Alloy threats
+            // Merge JS threats into Alloy threats (with deduplication)
             Object.keys(jsValidation.threats).forEach(key => {
                 if (jsValidation.threats[key] && jsValidation.threats[key].length > 0) {
                     if (!finalThreats[key]) finalThreats[key] = [];
-                    finalThreats[key] = [...finalThreats[key], ...jsValidation.threats[key]];
-                    finalCount += jsValidation.threats[key].length;
+                    // Only add JS threats not already found by Alloy
+                    const existingIds = new Set(
+                        finalThreats[key].map(t => (t.system || t.connection || ''))
+                    );
+                    const newThreats = jsValidation.threats[key].filter(t => {
+                        const id = t.system || t.connection || '';
+                        return !existingIds.has(id);
+                    });
+                    finalThreats[key] = [...finalThreats[key], ...newThreats];
+                    finalCount += newThreats.length;
                 }
             });
 
@@ -57,22 +123,34 @@ app.post('/analyze', async (req, res) => {
                 total_count: finalCount
             };
 
-            // Debug: Save merged result
-            fs.writeFileSync('debug_response_hybrid.json', JSON.stringify(finalResult, null, 2));
+            if (!IS_PRODUCTION) {
+                try {
+                    fs.writeFileSync('debug_response_hybrid.json', JSON.stringify(finalResult, null, 2));
+                } catch (e) { /* ignore */ }
+            }
 
             res.json({ success: true, result: finalResult });
         } else {
             res.status(500).json({ success: false, error: executionResult.error });
         }
     } catch (error) {
-        console.error('Error during analysis:', error);
-        fs.writeFileSync('last_error.txt', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        console.error('Error during analysis:', error.message);
+        if (!IS_PRODUCTION) {
+            try {
+                fs.writeFileSync('last_error.txt', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+            } catch (e) { /* ignore */ }
+        }
         res.status(500).json({ success: false, error: error.message });
+    } finally {
+        // Clean up temporary Alloy files
+        if (alloyFilePath) {
+            cleanupTempFiles(alloyFilePath);
+        }
     }
 });
 
 const server = app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`AMADEUS Backend running on http://localhost:${PORT} [${IS_PRODUCTION ? 'production' : 'development'}]`);
 });
 
 server.on('error', (error) => {
@@ -83,10 +161,6 @@ process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('exit', (code) => {
-    console.log(`Process exited with code: ${code}`);
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
 });

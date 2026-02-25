@@ -17,6 +17,7 @@ import ZoneNode from './ZoneNode';
 import SystemNode from './SystemNode';
 import PropertyPanel from './PropertyPanel';
 import DataFlowEdge from './DataFlowEdge';
+import ScoreDashboard from './ScoreDashboard';
 
 import useStore from '../store';
 import { convertGraphToJSON } from '../utils/graphConverter';
@@ -39,12 +40,13 @@ const EditorContent = ({ initialData, onExit }) => {
     const reactFlowWrapper = useRef(null);
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-    const { project, setViewport, toObject } = useReactFlow();
+    const { screenToFlowPosition, setViewport, toObject } = useReactFlow();
     const { selectedElement, setSelectedElement } = useStore();
     const [analysisResult, setAnalysisResult] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [selectedThreatId, setSelectedThreatId] = useState(null);
     const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+    const [analysisError, setAnalysisError] = useState(null);
 
     // Initialization & ID Sync
     useEffect(() => {
@@ -137,10 +139,9 @@ const EditorContent = ({ initialData, onExit }) => {
                 return;
             }
 
-            const reactFlowBounds = reactFlowWrapper.current.getBoundingClientRect();
-            const position = project({
-                x: event.clientX - reactFlowBounds.left,
-                y: event.clientY - reactFlowBounds.top,
+            const position = screenToFlowPosition({
+                x: event.clientX,
+                y: event.clientY,
             });
 
             let defaultType = label;
@@ -155,6 +156,7 @@ const EditorContent = ({ initialData, onExit }) => {
                 else if (label === 'Server') defaultType = 'Server';
                 else if (label === 'Mobile') defaultType = 'Mobile';
                 else if (label === 'Security Device') defaultType = 'SecurityDevice';
+                else if (label === 'DNS Server') defaultType = 'DNS Server';
                 else if (label === 'Wireless AP') defaultType = 'WirelessAP';
                 else if (label === 'SaaS') defaultType = 'SaaS';
                 else defaultType = 'Terminal';
@@ -171,7 +173,7 @@ const EditorContent = ({ initialData, onExit }) => {
 
             setNodes((nds) => nds.concat(newNode));
         },
-        [project, setNodes]
+        [screenToFlowPosition, setNodes]
     );
 
     // Auto-detect Zone on Drag Stop
@@ -221,12 +223,31 @@ const EditorContent = ({ initialData, onExit }) => {
         [nodes, setNodes]
     );
 
+    // Auto-save to localStorage periodically
+    useEffect(() => {
+        const timer = setInterval(() => {
+            if (nodes.length > 0) {
+                try {
+                    const flow = toObject();
+                    const autoSave = {
+                        meta: { title: "AMADEUS Auto-save", version: "1.0", date: new Date().toISOString() },
+                        nodes: flow.nodes,
+                        edges: flow.edges,
+                        viewport: flow.viewport
+                    };
+                    localStorage.setItem('amadeus_autosave', JSON.stringify(autoSave));
+                } catch (e) { /* ignore quota errors */ }
+            }
+        }, 30000); // Save every 30 seconds
+        return () => clearInterval(timer);
+    }, [nodes.length, toObject]);
+
     const handleAnalyze = async () => {
         setIsAnalyzing(true);
+        setAnalysisError(null);
 
         // 1. Empty Diagram Check
         if (nodes.length === 0) {
-            console.warn("Attempting to analyze empty diagram. Blocking request.");
             setAnalysisResult({ error: 'NO_DIAGRAM' });
             setIsAnalyzing(false);
             return;
@@ -236,10 +257,10 @@ const EditorContent = ({ initialData, onExit }) => {
             const graphData = convertGraphToJSON(nodes, edges);
             const result = await analyzeGraph(graphData);
             setAnalysisResult(result);
-            console.log("Analysis Result:", result);
         } catch (error) {
             console.error("Analysis failed:", error);
-            alert("분석에 실패했습니다. 콘솔을 확인해주세요.");
+            setAnalysisError(error.message || '분석 서버에 연결할 수 없습니다.');
+            setAnalysisResult(null);
         } finally {
             setIsAnalyzing(false);
         }
@@ -384,7 +405,7 @@ const EditorContent = ({ initialData, onExit }) => {
         setNodes(nds => updateElements(nds, realAllThreatIds, realSelectedThreatIds));
         setEdges(eds => updateElements(eds, realAllThreatIds, realSelectedThreatIds));
 
-    }, [selectedThreatId, analysisResult, setNodes, setEdges, nodes.length, edges.length]);
+    }, [selectedThreatId, analysisResult]);
 
     return (
         <div className="flex h-screen w-screen overflow-hidden bg-slate-950">
@@ -398,7 +419,6 @@ const EditorContent = ({ initialData, onExit }) => {
                     onNodesChange={onNodesChange}
                     onEdgesChange={onEdgesChange}
                     onConnect={onConnect}
-                    onInit={setViewport}
                     onDrop={onDrop}
                     onDragOver={onDragOver}
                     onNodeDragStop={onNodeDragStop}
@@ -406,14 +426,32 @@ const EditorContent = ({ initialData, onExit }) => {
                     edgeTypes={edgeTypes}
                     fitView
                     proOptions={{ hideAttribution: true }}
-                    style={{ background: '#0f172a' }} // Dark Slate 900
+                    style={{ background: '#0f172a' }}
                 >
-
                     <Background variant="dots" gap={20} size={1} color="#334155" />
                 </ReactFlow>
             </div>
 
             {/* Floating UI Layer */}
+
+            {/* Score Dashboard (Top Left) */}
+            <ScoreDashboard
+                nodes={nodes}
+                edges={edges}
+                analysisResult={analysisResult}
+                isAnalyzing={isAnalyzing}
+            />
+
+            {/* Error Banner */}
+            {analysisError && (
+                <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-30 bg-red-900/90 border border-red-700 text-red-200 px-6 py-3 shadow-lg flex items-center gap-3 max-w-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-400 shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span className="text-sm">{analysisError}</span>
+                    <button onClick={() => setAnalysisError(null)} className="text-red-400 hover:text-white ml-2 shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+            )}
 
             {/* Top Center Actions */}
             <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10 flex gap-2 bg-slate-800 border-2 border-slate-700 p-1.5 shadow-lg">

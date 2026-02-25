@@ -7,11 +7,13 @@
 const THREAT_MSGS = {
     'FindUnpatchedExposure': "[N2SF-IN-1] 취약점 노출: 외부 접점에 패치되지 않은 취약한 시스템이 존재합니다.",
     'FindEOL': "[N2SF-IN-9] EOL 자산: 기술 지원이 종료된 자산(EOL)을 중요 시스템으로 사용 중입니다.",
-    'FindAuditFailure': "[N2SF-Log] 감사 로그 미비: 중요 시스템의 감사 로그 기록 설정이 비활성화되어 있습니다.",
-    'FindTimeSyncFailure': "[N2SF-Log] 시각 동기화 미비: 로그의 신뢰성을 위해 안전한 시각 동기화(NTP)가 필요합니다.",
+    'FindAuditFailure': "[N2SF-AC-M2] 감사 로그 미비: 중요 시스템의 감사 로그 기록 설정이 비활성화되어 있습니다.",
+    'FindTimeSyncFailure': "[N2SF-IF-M2] 시각 동기화 미비: 로그의 신뢰성을 위해 안전한 시각 동기화(NTP)가 필요합니다.",
     'FindWeakSession': "[N2SF-SN-3] 세션 설정 미흡: 타임아웃 및 동시 접속 제한 등 세션 통제 정책을 강화하십시오.",
     'FindShadowIT': "[N2SF-DV-M1] 미등록 자산: 보안 관리 대장에 등록되지 않은 자산이 연결되었습니다."
 };
+
+const log = (...args) => { if (process.env.NODE_ENV !== 'production') console.log(...args); };
 
 /**
  * Validate Common Properties
@@ -44,7 +46,7 @@ function validateCommonProperties(data) {
         const zoneType = getZoneType(sys.location || sys.loc);
         const patchStatus = sys.patch_status || sys.patchStatus || 'UpToDate';
 
-        console.log(`[JSValidator] Checking ${sysLabel}: Zone=${zoneType}, Patch=${patchStatus}, Grade=${sys.grade}`);
+        log(`[JSValidator] Checking ${sysLabel}: Zone=${zoneType}, Patch=${patchStatus}, Grade=${sys.grade}`);
 
         // 1. FindUnpatchedExposure (Patch Status)
         // Rule: patchStatus == Vulnerable AND Zone in [Internet, DMZ, Cloud]

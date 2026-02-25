@@ -6,24 +6,27 @@ open n2sf_base
 // ============================================================
 
 // 1. 망 분리 우회 (Split Tunneling) [N2SF-EB-4]
-// 인터넷과 업무망에 '동시' 연결된 단말 탐지
-// 1. 망 분리 우회 (Split Tunneling) [N2SF-EB-4]
-// 인터넷과 업무망에 '동시' 연결된 단말 탐지
+// 인터넷과 업무망(Intranet)에 '동시' 연결된 단말 탐지
+// 분할 터널링: 하나의 단말이 내·외부 통신을 동시에 수행하는 경우
+// 경계장비(Gateway, SecurityGear)는 양 구역 연결이 본래 역할이므로 제외
 fun FindSplitTunneling: System {
     { s: System |
-      s.physicalLoc.type = Internet
-      and (Intranet in s.connectedZones.type)
-      and (some c: Connection | c.from = s and c.to.physicalLoc.type = Internet and c.connType = FileTransfer)
+      s.deviceType not in Gateway + SecurityGear
+      and some c1, c2: Connection |
+        c1.from = s and c2.from = s
+        and c1.to.physicalLoc.type = Internet
+        and c2.to.physicalLoc.type = Intranet
     }
 }
 
 // 2. 망 간 직접 연결 위반 (Direct Connection Violation) [N2SF-EB-5]
-// 서로 다른 보안 구역 간 통신은 반드시 Gateway를 경유해야 함
+// 서로 다른 보안 구역 간 통신은 반드시 Gateway 또는 보안장비를 경유해야 함
+// Gateway와 SecurityGear(방화벽 등)는 경계장비이므로 경유 대상에서 제외
 fun FindDirectConnection: Connection {
     { c: Connection |
       c.from.physicalLoc.type != c.to.physicalLoc.type
-      and c.from.deviceType != Gateway
-      and c.to.deviceType != Gateway
+      and c.from.deviceType not in Gateway + SecurityGear
+      and c.to.deviceType not in Gateway + SecurityGear
     }
 }
 
@@ -56,12 +59,17 @@ fun FindStorageViolations: System -> Data {
     }
 }
 
-// 5. 암호화 품질 미비 (Weak Crypto) [N2SF-EA-1]
-// 외부/무선 구간 전송 시 검증필 암호모듈(Validated) 필수
+// 5. 암호화 품질 미비 (Weak Crypto) [N2SF-EA-1, DT-3]
+// (1) 외부/무선/클라우드/DMZ 구간은 무조건 검증필 암호모듈 필수
+// (2) S/C 등급 데이터를 전송하는 모든 연결에 검증필 암호모듈 필수
 fun FindWeakCrypto: Connection {
     { c: Connection |
-      (c.from.physicalLoc.type in Internet + Wireless or c.to.physicalLoc.type in Internet + Wireless)
-      and c.encQuality in NoEncryption + Weak_Algo
+      c.encQuality in NoEncryption + Weak_Algo
+      and (
+          c.from.physicalLoc.type in Internet + Wireless + Cloud + DMZ
+          or c.to.physicalLoc.type in Internet + Wireless + Cloud + DMZ
+          or (some d: c.carries | d.grade in Sensitive + Classified)
+      )
     }
 }
 
@@ -87,12 +95,23 @@ fun FindInsecureKey: System {
 // Group C. 접근 통제 및 인증 (Access & Auth)
 // ============================================================
 
-// 8. 인증 강도 위반 (Weak Auth) [N2SF-MA-1, RA-3]
-// 관리자/원격 접속은 MFA 필수
+// 8. 관리자 인증 강도 위반 (Weak Admin Auth) [N2SF-MA-1]
+// 관리자 계정은 다중요소 인증(MFA) 필수
 fun FindWeakAuth: System {
     { s: System |
       (s.isManagementDevice = 1 or s.physicalLoc.type in Internet + Cloud)
       and s.authMechanism = Single_Factor
+    }
+}
+
+// 8-1. 사용자 인증 강도 위반 (Weak User Auth) [N2SF-MA-2]
+// 미지정 경로/비인가 단말의 사용자 계정 접속 시 MFA 필수
+fun FindWeakUserAuth: Connection {
+    { c: Connection |
+      c.from.physicalLoc.type != c.to.physicalLoc.type
+      and c.to.grade in Sensitive + Classified
+      and c.to.authMechanism = Single_Factor
+      and c.isAdminTraffic = 0
     }
 }
 
@@ -106,10 +125,10 @@ fun FindExposedAdmin: Connection {
 }
 
 // 10. 상시적 원격 관리 (Permanent Remote Access) [N2SF-LP-4(1)]
-// 외부 원격 관리는 '한시적'으로만 허용
+// 외부 원격 관리는 '한시적'으로만 허용 (인터넷 및 클라우드 모두 적용)
 fun FindPermanentAdmin: Connection {
     { c: Connection |
-      c.isAdminTraffic = 1 and c.from.physicalLoc.type = Internet and c.accessPolicy = Permanent
+      c.isAdminTraffic = 1 and c.from.physicalLoc.type in Internet + Cloud and c.accessPolicy = Permanent
     }
 }
 
@@ -202,10 +221,13 @@ fun FindDLPFailure: Connection {
 }
 
 // 22. AI 필터링 미비 (AI Filter Gap) [N2SF 모델 2, 5]
+// AI/LLM 서비스 이용 시 민감정보 입력 방지 필터 필요
+// 민감/기밀 데이터를 전송하는 SaaS/PaaS 연결에만 적용
 fun FindAIFilterFailure: Connection {
     { c: Connection |
       c.to.serviceModel in SaaS + PaaS
       and c.to.physicalLoc.type in Internet + Cloud
+      and some d: c.carries | d.grade in Sensitive + Classified
       and !(AI_Filter in c.inspections)
     }
 }
@@ -248,7 +270,8 @@ fun FindAuditFailure: System { none }
 // 27. 시각 동기화 미비 (Time Sync Failure) -> JS Validator로 이관
 fun FindTimeSyncFailure: System { none }
 
-// 28. 보안 설정 강화 미흡 (Hardening Failure) [N2SF-AM-4]
+// 28. 보안 설정 강화 미흡 (Hardening Failure) [N2SF-AM-4, IN-6, IN-7]
+// AM-4: 초기 인증수단 변경, IN-6: 불필요 구성요소 제거, IN-7: 주기적 점검
 fun FindHardeningFailure: System {
     { s: System | (some d: s.stores | d.grade in Sensitive + Classified) and s.isHardened = 0 }
 }
@@ -315,14 +338,225 @@ fun FindTransitiveLeaks: System -> Data {
     { s: System, d: Data | d in s.stores and some dest: s.^insecureLink | lt[dest.grade, d.grade] }
 }
 
-// 39. 우회 경로 탐지 (Bypass Detection)
-// Gateway를 통하지 않는 모든 외부 연결
+// 39. 보안 검사 미경유 인바운드 연결 (Uninspected Inbound) [N2SF-EB-3, EB-5]
+// 외부→내부 인바운드 연결 중 보안 검사(AntiVirus, DLP 등)가 전혀 없는 연결
 fun FindBypass: Connection {
-    { c: Connection | 
-      c.from.physicalLoc.type in Internet 
-      and c.to.physicalLoc.type = Intranet 
-      and c.to.deviceType != Gateway 
-      and c.from.deviceType != Gateway 
+    { c: Connection |
+      c.from.physicalLoc.type in Internet + Cloud
+      and c.to.physicalLoc.type in Intranet + DMZ
+      and c.from.deviceType != Gateway
+      and c.to.deviceType != Gateway
+      and no c.inspections
+    }
+}
+
+// ============================================================
+// Group H. 추가 N2SF 통제 규칙 (Supplementary Rules)
+// ============================================================
+
+// 40. VPN/우회 통신 탐지 (VPN Bypass) [N2SF-EB-15]
+// 내부망에서 외부로 VPN 터널을 직접 생성하는 우회 경로 탐지
+fun FindVPNBypass: Connection {
+    { c: Connection |
+      c.protocol = VPN_Tunnel
+      and c.from.physicalLoc.type = Intranet
+      and c.to.physicalLoc.type = Internet
+      and c.from.deviceType != Gateway
+    }
+}
+
+// 41. 외부향 비인가 아웃바운드 통신 (Outbound Threat) [N2SF-EB-6]
+// 내부에서 외부로의 사이버위협 통신(ClearText, 비인가 프로토콜) 탐지
+fun FindOutboundThreat: Connection {
+    { c: Connection |
+      c.from.physicalLoc.type in Intranet + DMZ
+      and c.to.physicalLoc.type = Internet
+      and c.protocol = ClearText
+      and c.from.deviceType not in SecurityGear + Gateway
+    }
+}
+
+// 42. CDS 우회 경로 (CDS Bypass) [N2SF-CD-9]
+// CDS를 경유하지 않는 크로스도메인 데이터 전송 탐지
+// CDS는 폐쇄망(Intranet/ManagementZone) 간 또는 기밀등급 관련 연계에만 요구
+// 인터넷 접점(Internet/DMZ/Cloud) 간 연결에는 CDS 불필요
+fun FindCDSBypass: Connection {
+    { c: Connection |
+      c.connType = FileTransfer
+      and c.from.physicalLoc.type != c.to.physicalLoc.type
+      and c.from.grade != c.to.grade
+      and (c.from.physicalLoc.type in Intranet + ManagementZone + DevTestZone
+           or c.to.physicalLoc.type in Intranet + ManagementZone + DevTestZone)
+      and c.from.cdsType = NotCDS
+      and c.to.cdsType = NotCDS
+      and c.from.deviceType not in Gateway + SecurityGear
+      and c.to.deviceType not in Gateway + SecurityGear
+    }
+}
+
+// 43. 무선 구간 암호화 미적용 (Weak Wireless) [N2SF-WA-1]
+// 무선망 구간의 인증 및 암호화 미적용 탐지
+fun FindWeakWireless: Connection {
+    { c: Connection |
+      (c.from.physicalLoc.type = Wireless or c.to.physicalLoc.type = Wireless)
+      and c.encQuality = NoEncryption
+    }
+}
+
+// 44. 외부 연결 접점 과다 (Excessive Endpoints) [N2SF-EB-1]
+// 외부 연결 접점 수가 과다한 비게이트웨이 시스템
+fun FindExcessiveEndpoints: System {
+    { s: System |
+      s.physicalLoc.type = Intranet
+      and s.deviceType != Gateway
+      and #{ c: Connection | c.from = s and c.to.physicalLoc.type in Internet + Cloud } > 1
+    }
+}
+
+// 45. 인증정보 평문 전송 (Credential Exposure) [N2SF-LI-1, AM-5]
+// 인증정보(AuthCredential)가 암호화 없이 전송되는 경우
+fun FindCredentialExposure: Connection {
+    { c: Connection |
+      (some d: c.carries | d.dataType = AuthCredential)
+      and c.encQuality in NoEncryption + Weak_Algo
+    }
+}
+
+// ============================================================
+// Group I. 추가 갭 분석 규칙 (Gap Analysis Rules)
+// ============================================================
+
+// 46. 기밀(C)급 시스템 인터넷 연결 금지 (Classified Internet Ban) [N2SF-IF-11]
+// C등급 시스템은 인터넷과 완전 격리 필수, 연결 존재 시 위반
+fun FindClassifiedInternet: System {
+    { s: System |
+      s.grade = Classified
+      and (some c: Connection |
+        (c.from = s and c.to.physicalLoc.type = Internet)
+        or (c.to = s and c.from.physicalLoc.type = Internet)
+      )
+    }
+}
+
+// 47. 내부 시스템 외부 직접 노출 (Internal Exposure) [N2SF-EB-10]
+// Intranet 서버가 Internet에서 직접 도달 가능 (Gateway/보안장비가 아닌데 인바운드 존재)
+fun FindInternalExposure: System {
+    { s: System |
+      s.physicalLoc.type = Intranet
+      and s.deviceType not in Gateway + SecurityGear
+      and (some c: Connection | c.from.physicalLoc.type = Internet and c.to = s)
+    }
+}
+
+// 48. 보안구역 내 비인가 무선 인터페이스 (Rogue Wireless) [N2SF-WA-4]
+// S/C 등급 보안구역(Intranet, ManagementZone)에서 무선 인터페이스 보유 시스템 탐지
+fun FindRogueWireless: System {
+    { s: System |
+      s.hasWirelessInterface = 1
+      and s.physicalLoc.type in Intranet + ManagementZone
+      and s.grade in Sensitive + Classified
+    }
+}
+
+// 49. 인바운드 안티바이러스 미적용 (Missing AntiVirus) [N2SF-IN-16]
+// 외부→내부 연결에 AntiVirus 검사 누락
+fun FindMissingAntiVirus: Connection {
+    { c: Connection |
+      c.from.physicalLoc.type in Internet + Cloud
+      and c.to.physicalLoc.type in Intranet + DMZ
+      and !(AntiVirus in c.inspections)
+    }
+}
+
+// 50. 원격 관리 세션 암호화 미적용 (Unencrypted Admin) [N2SF-RA-2]
+// 외부에서 내부로의 관리 세션이 암호화되지 않은 경우
+fun FindUnencryptedAdmin: Connection {
+    { c: Connection |
+      c.isAdminTraffic = 1
+      and c.from.physicalLoc.type in Internet + Cloud
+      and c.encQuality in NoEncryption + Weak_Algo
+    }
+}
+
+// 51. CDS 접근 단말 미등록 (Unregistered CDS Access) [N2SF-CD-12]
+// 미등록 단말이 CDS 장비에 접속하는 경우
+fun FindUnregisteredCDSAccess: Connection {
+    { c: Connection |
+      c.to.cdsType != NotCDS
+      and c.from.isRegistered = 0
+    }
+}
+
+// ============================================================
+// Group J. 최종 갭 분석 규칙 (Final Gap Analysis)
+// ============================================================
+
+// 52. 구역 등급 부적합 배치 (Zone Grade Mismatch) [N2SF 본문 §2.3]
+// 시스템의 보안등급이 배치된 구역의 등급보다 높으면 위반
+// (Classified 시스템은 Classified 구역에만, Sensitive는 Sensitive 이상 구역에만 배치)
+fun FindZoneGradeMismatch: System {
+    { s: System |
+      gt[s.grade, s.physicalLoc.grade]
+    }
+}
+
+// 53. 기밀 자산 클라우드 금지 (Classified on Cloud) [N2SF-IF-11 확장]
+// C등급 시스템 또는 C등급 데이터를 보유한 시스템이 클라우드에 위치하면 위반
+fun FindClassifiedCloud: System {
+    { s: System |
+      s.physicalLoc.type = Cloud
+      and (s.grade = Classified or (some d: s.stores | d.grade = Classified))
+    }
+}
+
+// 54. IoT 장비 중요 데이터 보유 (IoT Data Risk) [N2SF-DV, IN-7]
+// 보안 기능이 제한적인 IoT 장비가 S/C 등급 데이터를 보유하면 위협
+fun FindIoTDataRisk: System {
+    { s: System |
+      s.deviceType = IoT
+      and (some d: s.stores | d.grade in Sensitive + Classified)
+    }
+}
+
+// ============================================================
+// Group K. 최종 C군 규칙 (New Attribute-Based Rules)
+// ============================================================
+
+// 55. 중요 데이터 저장 암호화 미적용 (Unencrypted Storage) [N2SF-DU-2]
+// S/C 등급 데이터를 보유한 시스템이 저장 암호화를 적용하지 않으면 위반
+fun FindUnencryptedStorage: System {
+    { s: System |
+      (some d: s.stores | d.grade in Sensitive + Classified)
+      and s.hasStorageEncryption = 0
+    }
+}
+
+// 56. 보안구역 내 블루투스 통신 위험 (Bluetooth Risk) [N2SF-BC-1]
+// S/C 등급 보안구역에서 블루투스 인터페이스가 활성화된 시스템 탐지
+fun FindBluetoothRisk: System {
+    { s: System |
+      s.hasBluetoothInterface = 1
+      and s.physicalLoc.type in Intranet + ManagementZone
+      and s.grade in Sensitive + Classified
+    }
+}
+
+// 57. 메시지 레벨 암호화 미적용 (No Message Encryption) [N2SF-DT-4]
+// S/C 등급 데이터 전송 시 메시지(페이로드) 자체 암호화 미적용
+fun FindNoMessageEncryption: Connection {
+    { c: Connection |
+      (some d: c.carries | d.grade in Sensitive + Classified)
+      and c.hasMessageEncryption = 0
+    }
+}
+
+// 58. 기밀 통신 전용회선 미사용 (No Private Line) [N2SF-IF-15]
+// 기밀(C) 등급 데이터의 망 간 전송 시 전용회선 미사용
+fun FindNoPrivateLine: Connection {
+    { c: Connection |
+      (some d: c.carries | d.grade = Classified)
+      and c.from.physicalLoc.type != c.to.physicalLoc.type
+      and c.isPrivateLine = 0
     }
 }
 

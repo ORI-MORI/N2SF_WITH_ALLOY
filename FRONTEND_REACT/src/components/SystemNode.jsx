@@ -10,6 +10,7 @@ const icons = {
     Mobile: Smartphone,
     WirelessAP: Wifi,
     SaaS: Cloud,
+    'DNS Server': Globe,
 };
 
 const connectionNodeIdSelector = (state) => state.connectionNodeId;
@@ -34,6 +35,7 @@ const SystemNode = ({ data, selected }) => {
             case 'Mobile': return 'bg-pink-900 border-pink-700 text-pink-100';
             case 'WirelessAP': return 'bg-cyan-900 border-cyan-700 text-cyan-100';
             case 'SaaS': return 'bg-sky-900 border-sky-700 text-sky-100';
+            case 'DNS Server': return 'bg-violet-900 border-violet-700 text-violet-100';
             default: return 'bg-slate-800 border-slate-600 text-slate-100';
         }
     };
@@ -47,6 +49,7 @@ const SystemNode = ({ data, selected }) => {
         Mobile: '모바일',
         WirelessAP: '무선AP',
         SaaS: 'SaaS',
+        'DNS Server': 'DNS',
         Zone: '구역'
     };
 

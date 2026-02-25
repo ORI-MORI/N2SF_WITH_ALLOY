@@ -105,7 +105,9 @@ abstract sig System {
     isRedundant: Int,           // 이중화(HA)
     hasSecureClock: Int,        // 시각 동기화
     hasDDoSProtection: Int,
-    sessionPolicy: SessionConfig
+    sessionPolicy: SessionConfig,
+    hasStorageEncryption: Int,   // 저장 암호화 여부 [DU-2]
+    hasBluetoothInterface: Int   // 블루투스 인터페이스 보유 [BC-1]
 }
 enum FailureMode { Fail_Secure, Fail_Open }
 
@@ -128,5 +130,7 @@ abstract sig Connection {
     // 보안 필터링
     hasContentFilter: Int, // DLP 적용 여부
     hasCDR: Int,           // 무해화 적용 여부
-    inspections: set InspectionCapability
+    inspections: set InspectionCapability,
+    hasMessageEncryption: Int, // 메시지 레벨 암호화 [DT-4]
+    isPrivateLine: Int         // 전용회선 여부 [IF-15]
 }

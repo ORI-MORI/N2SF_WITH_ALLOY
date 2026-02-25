@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ReactFlowProvider } from 'reactflow';
 import Editor from './components/Editor';
 import LandingPage from './components/LandingPage';
+import ErrorBoundary from './ErrorBoundary';
 import './App.css';
 
 function App() {
@@ -19,15 +20,17 @@ function App() {
   };
 
   return (
-    <div className="app-container">
-      {currentView === 'landing' ? (
-        <LandingPage onStartProject={handleStartProject} />
-      ) : (
-        <ReactFlowProvider>
-          <Editor initialData={initialData} onExit={handleExitProject} />
-        </ReactFlowProvider>
-      )}
-    </div>
+    <ErrorBoundary>
+      <div className="app-container">
+        {currentView === 'landing' ? (
+          <LandingPage onStartProject={handleStartProject} />
+        ) : (
+          <ReactFlowProvider>
+            <Editor initialData={initialData} onExit={handleExitProject} />
+          </ReactFlowProvider>
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }
 

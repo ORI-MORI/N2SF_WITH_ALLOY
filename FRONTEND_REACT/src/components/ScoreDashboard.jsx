@@ -35,10 +35,8 @@ const ScoreDashboard = ({ nodes, edges, analysisResult, isAnalyzing }) => {
         const systemNodes = nodes.filter(n => n.type !== 'zone');
 
         if (!systemNodes || systemNodes.length === 0) {
-            console.log("ScoreDashboard: No system nodes, returning '-'");
             return { ratio: null, text: "-", connected: 0, total: 0 };
         }
-        console.log("ScoreDashboard: System nodes exist", systemNodes.length);
         const totalNodes = systemNodes.length;
 
         // Find all nodes that are connected (source or target of an edge)

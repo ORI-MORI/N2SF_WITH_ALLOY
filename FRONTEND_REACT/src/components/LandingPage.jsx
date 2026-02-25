@@ -1,11 +1,12 @@
 import React, { useRef } from 'react';
 import { FileUp, Plus, LayoutTemplate } from 'lucide-react';
 import model1 from '../data/presets/model1.json';
+import model2 from '../data/presets/model2.json';
 
 // Preset Registry
 const PRESETS = [
     { id: 'model1', name: 'Model 1: Internet Terminal', data: model1 },
-    // Add more presets here
+    { id: 'model2', name: 'Sample: 국방 통합 네트워크', data: model2 },
 ];
 
 export default function LandingPage({ onStartProject }) {
@@ -51,7 +52,7 @@ export default function LandingPage({ onStartProject }) {
 
                 {/* Header */}
                 <div className="text-center space-y-6 mb-12">
-                    <img src="/AMADEUS.png" alt="AMADEUS Logo" className="mx-auto w-[400px] h-auto object-contain animate-fade-in-up drop-shadow-2xl opacity-90" />
+                    <img src="/npluslab_logo.png" alt="Nplus Lab Logo" className="mx-auto w-[420px] h-auto object-contain animate-fade-in-up drop-shadow-2xl brightness-0 invert" />
                     <p className="text-slate-300 font-mono tracking-widest text-sm uppercase">Advanced Threat Modeling & Analysis Platform</p>
                 </div>
 

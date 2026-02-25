@@ -55,3 +55,13 @@ BACKEND/alloy/user_instance_real.xml
 BACKEND/alloy/*.cnf
 BACKEND/alloy/*.tmp
 BACKEND/alloy/tmp*
+
+# Large PDF guideline documents (not for distribution)
+국가망보안체계가이드라인.pdf
+국가 망 보안체계 보안통제 항목 해설서.pdf
+
+# Report generation script (one-time use)
+generate_report.py
+
+# Claude config
+.claude/
